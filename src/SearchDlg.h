@@ -199,6 +199,8 @@ private:
     std::wstring                      m_toolTipReplaceString;
     std::unique_ptr<CInfoRtfDialog>   m_rtfDialog;
     bool                              m_isRegexValid;
+    unsigned __int64                  m_ullTickCountStart;
+    unsigned __int64                  m_ullTickCountEnd;
 
     CDlgResizer                       m_resizer;
     int                               m_themeCallbackId;

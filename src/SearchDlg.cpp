@@ -61,6 +61,7 @@
 #include <numeric>
 #include <ranges>
 #include <string>
+#include <process.h>
 
 #pragma warning(push)
 #pragma warning(disable : 4996) // warning STL4010: Various members of std::allocator are deprecated in C++17
@@ -74,7 +75,7 @@
 
 constexpr auto          SearchEditSubclassID = 4321;
 
-DWORD WINAPI            SearchThreadEntry(LPVOID lpParam);
+unsigned WINAPI         SearchThreadEntry(LPVOID lpParam);
 
 // ReSharper disable once CppInconsistentNaming
 UINT                    CSearchDlg::m_grepwinStartupmsg = RegisterWindowMessage(L"grepWin_StartupMessage");
@@ -173,6 +174,8 @@ CSearchDlg::CSearchDlg(HWND hParent)
     , m_selectedItems(0)
     , m_bAscending(true)
     , m_isRegexValid(true)
+    , m_ullTickCountStart(0)
+    , m_ullTickCountEnd(0)
     , m_themeCallbackId(0)
     , m_pDropTarget(nullptr)
     , m_autoCompleteFilePatterns(bPortable ? &g_iniFile : nullptr)
@@ -823,10 +826,12 @@ LRESULT CSearchDlg::DlgFunc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
         }
         case SEARCH_START:
         {
-            m_totalItems    = 0;
-            m_searchedItems = 0;
-            m_totalMatches  = 0;
-            m_selectedItems = 0;
+            m_totalItems        = 0;
+            m_searchedItems     = 0;
+            m_totalMatches      = 0;
+            m_selectedItems     = 0;
+            m_ullTickCountStart = 0;
+            m_ullTickCountEnd   = 0;
             UpdateInfoLabel();
             // reset the sort indicator
             HDITEM hd         = {0};
@@ -842,6 +847,7 @@ LRESULT CSearchDlg::DlgFunc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
             }
 
             SetTimer(*this, LABELUPDATETIMER, 200, nullptr);
+            m_ullTickCountStart = ::GetTickCount64();
         }
         break;
         case SEARCH_FOUND:
@@ -860,6 +866,7 @@ LRESULT CSearchDlg::DlgFunc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
         break;
         case SEARCH_END:
         {
+            m_ullTickCountEnd = ::GetTickCount64();
             AddFoundEntry(nullptr, true);
             AutoSizeAllColumns();
             UpdateInfoLabel();
@@ -1183,12 +1190,20 @@ LRESULT CSearchDlg::DoCommand(int id, int msg)
                     m_pTaskbarList->SetProgressState(*this, TBPF_INDETERMINATE);
                 // now start the thread which does the searching
                 DWORD  dwThreadId = 0;
+                HANDLE hThread    = (HANDLE)_beginthreadex(nullptr, // no security attribute
+                                                 0,       // default stack size
+                                                 SearchThreadEntry,
+                                                 static_cast<LPVOID>(this), // thread parameter
+                                                 0,                         // not suspended
+                                                 (unsigned*)& dwThreadId);    // returns thread ID
+                /*
                 HANDLE hThread    = CreateThread(nullptr, // no security attribute
                                                  0,       // default stack size
                                                  SearchThreadEntry,
                                                  static_cast<LPVOID>(this), // thread parameter
                                                  0,                         // not suspended
                                                  &dwThreadId);              // returns thread ID
+                */
                 if (hThread != nullptr)
                 {
                     // Closing the handle of a running thread just decreases
@@ -1788,6 +1803,13 @@ void CSearchDlg::UpdateInfoLabel()
                        m_searchedItems, m_totalItems - m_searchedItems, m_totalMatches, m_items.size());
     }
     sText = buf;
+
+    if (0 < m_ullTickCountEnd && 0 < m_ullTickCountStart && m_ullTickCountEnd > m_ullTickCountStart && !sText.empty())
+    {
+        wchar_t temp[128] = {0};
+        swprintf_s(temp, _countof(temp), L"  [%.3fs]", (m_ullTickCountEnd - m_ullTickCountStart) / (double)1000.0);
+        sText += temp;
+    }
 
     SetDlgItemText(*this, IDC_SEARCHINFOLABEL, sText.c_str());
 }
@@ -4048,7 +4070,7 @@ void CSearchDlg::SearchFile(CSearchInfo sInfo, const std::wstring& searchRoot, b
     SendMessage(*this, SEARCH_PROGRESS, (nFound >= 0), 0);
 }
 
-DWORD WINAPI SearchThreadEntry(LPVOID lpParam)
+unsigned WINAPI SearchThreadEntry(LPVOID lpParam)
 {
     CSearchDlg* pThis = static_cast<CSearchDlg*>(lpParam);
     if (pThis)
